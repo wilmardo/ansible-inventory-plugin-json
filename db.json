@@ -1,0 +1,32 @@
+{
+  "all": {
+    "vars": {
+      "ansible_host": "127.0.0.1",
+      "ansible_ssh_user": "vagrant",
+      "ansible_ssh_private_key_file":
+          "~/.vagrant.d/insecure_private_key"
+      }
+    },
+    "apache": {
+      "hosts": ["klant1.web.domain.local"]
+    },
+    "mysql": {
+      "hosts": ["klant1.sql.domain.local"]
+    },
+    "_meta": {
+      "hostvars": {
+        "klant1.sql.domain.local": {
+            "ansible_port": "2222"
+        },
+        "klant1.web.domain.local": {
+            "ansible_port": "2200"
+        },
+        "klant2.sql.domain.local": {
+            "ansible_port": "2203"
+        },
+        "klant2.web.domain.local": {
+            "ansible_port": "2204"
+        }
+      }
+    }
+}
