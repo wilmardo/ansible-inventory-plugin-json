@@ -1,77 +1,112 @@
-# Copyright (c) 2018 Wilmar den Ouden
+# Copyright (c) 2018 Intermax Automation
 
 from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 DOCUMENTATION = '''
-    name: JSON
+    name: eva_inventory
     plugin_type: inventory
     authors:
-        - Wilmar den Ouden <info@wilmardenouden.nl>
-    short_description: Remote JSON inventory source
+        - Wilmar den Ouden <w.denouden@intermax.nl>
+    short_description: Intermax (EVA) inventory source
     description:
-        - Fetch hosts from JSON url's
+        - Fetch hosts from EVA by ID
+    requirements:
+      - whitelisting in configuration
+      - python-requests library
     options:
-        hosts:
-            description: url's of JSON to get
-            type: list
-            default: []
+        url:
+            description: URL of EVA POST endpoint 
+            env:
+                - name: EVA_INVENTORY_URL
+            required: True
+            ini:
+                - section: eva_inventory
+                  key: url          
+        token:
+            description: Bearer token to authenticate with the EVA POST endpoint 
+            env:
+                - name: EVA_INVENTORY_TOKEN
+            required: True
+            ini:
+                - section: eva_inventory
+                  key: token
+        parameters:
+            description: id of which JSON to GET from EVA
+            type: string
+            default: ''
 '''
 
-try:
-    from urllib.request import urlopen
-    from urllib.error import URLError, HTTPError
-except ImportError:
-    from urllib2 import urlopen, URLError, HTTPError
-
-import json
 
 from ansible.errors import AnsibleError, AnsibleParserError
 from ansible.module_utils.six import iteritems
 from ansible.module_utils._text import to_native
 from ansible.plugins.inventory import BaseInventoryPlugin
-from ansible.inventory.manager import InventoryData
+from requests import get, ConnectionError, HTTPError, Timeout, TooManyRedirects
+from os import environ
 
 
 class InventoryModule(BaseInventoryPlugin):
-    """ Host inventory parser for Ansible using data from remote JSON """
+    """Host inventory parser for Ansible using data from EVA"""
 
-    NAME = 'JSON'
+    # These options do not seem to be implemented yet, but kept for future compatibility
+    INVENTORY_NAME = 'eva_inventory'
+    INVENTORY_VERSION = 0.1
+    INVENTORY_NEEDS_WHITELIST = True
+
+    EVA_URL = ""
+    EVA_TOKEN = ""
 
     def __init__(self):
-
         super(InventoryModule, self).__init__()
-
         self._hosts = set()
+        self.disabled = False
 
-    def verify_file(self, path):
-        return True
-
-    # TODO: Check if parsing multiple json after request and then _parse_to_inventory is faster
-    def parse(self, inventory, loader, url_list, cache=None):
-        path = 'inventory/'
-        super(InventoryModule, self).parse(inventory, loader, path, cache=cache)
+    def parse(self, inventory, loader, client_id, cache=None):
+        super(InventoryModule, self).parse(inventory, loader, client_id, cache=cache)
 
         try:
-            for u in url_list.split(','):
-                u = u.strip()
-                if u:
-                    response = self._get_json(u)
-                    self._parse_to_inventory(self.loader.load(response))
+            self.EVA_URL = os.environ('EVA_URL')
+            self.EVA_TOKEN = os.environ('EVA_TOKEN')
+            if self.EVA_URL is None:
+                raise ValueError('No url value specified')
+            if self.EVA_TOKEN is None:
+                raise ValueError('No token value specified')
+        except (KeyError, ValueError) as e:
+            # FIXME: _display not yet implemented for InventoryModule like CallbackModule has
+            # self._display.warning("Missing option for EVA callback plugin: %s" % to_native(e))
+            self.disabled = True
+
+            if deployment_id:
+                response = self._get_json()
+                json_response = self.loader.load(response)
+                self._parse_to_inventory(json_response)
+            else:
+                self.disabled = True
+                # FIXME: Fix proper exception
+                raise Exception
 
         except Exception as e:
             raise AnsibleParserError(to_native(e))
 
-    def _get_json(self, url):
-        try:
-            return urlopen(url).read()
-        except HTTPError as e:
-            raise AnsibleError('The server (%s) couldn\'t fulfill the request, code: %s' % (url, e.code))
-        except URLError as e:
-            raise AnsibleError('The server (%s) couldn\'t be reached, reason: %s' % (url, e.reason))
+    def verify_file(self, path):
+        return True
 
-    def _parse_to_inventory(self, rjson):
-        '''Repurpose https://github.com/ansible/ansible/blob/devel/lib/ansible/plugins/inventory/script.py'''
+    def _get_json(self):
+        headers = {
+            'Authorization': 'Bearer ' + self.EVA_TOKEN,
+            'Accept': 'application/json'
+        }
+        try:
+            response = get(self.EVA_URL, headers=headers)
+            response.raise_for_status()
+            return response.content
+        except (ConnectionError, HTTPError, Timeout, TooManyRedirects) as e:
+            raise AnsibleError(to_native(e))
+
+    def _parse_to_inventory(self, data):
+        # Repurpose https://github.com/ansible/ansible/blob/devel/lib/ansible/plugins/inventory/script.py
+
         group = None
         data_from_meta = None
 
@@ -79,7 +114,7 @@ class InventoryModule(BaseInventoryPlugin):
         # if this "hostvars" exists at all then do not call --host for each # host.
         # This is for efficiency and scripts should still return data
         # if called with --host for backwards compat with 1.2 and earlier.
-        for (group, gdata) in rjson.items():
+        for (group, gdata) in data.items():
             if group == '_meta':
                 if 'hostvars' in gdata:
                     data_from_meta = gdata['hostvars']
@@ -94,10 +129,10 @@ class InventoryModule(BaseInventoryPlugin):
                 except AttributeError as e:
                     raise AnsibleError("Improperly formatted host information for %s: %s" % (host, to_native(e)))
 
-            self.populate_host_vars([host], got)  # 2.5 renamed to _populate_host_vars
+            self._populate_host_vars([host], got)  # 2.5 renamed to _populate_host_vars
 
     def _parse_group(self, group, data):
-        '''Repurpose https://github.com/ansible/ansible/blob/devel/lib/ansible/plugins/inventory/script.py'''
+        # Repurpose https://github.com/ansible/ansible/blob/devel/lib/ansible/plugins/inventory/script.py'
 
         self.inventory.add_group(group)
 
